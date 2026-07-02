@@ -1,327 +1,186 @@
 import streamlit as st
-from google import genai
+import requests
 import json
-import os
-import time
 from datetime import datetime
 
-# ================= STREAMLIT PAGE CONFIG =================
-st.set_page_config(page_title="JARVIS AI ONLINE SYSTEM", page_icon="🤖", layout="centered")
+# ================= PAGE CONFIG =================
+st.set_page_config(page_title="JARVIS AI", page_icon="🤖", layout="centered")
 
 # Custom CSS
 st.markdown("""
     <style>
-    .stApp { background-color: #1a1a1a; }
-    .terminal-title {
-        font-family: 'Courier New', Courier, monospace;
-        color: #4af626;
-        font-weight: bold;
-        text-align: center;
-        font-size: 32px;
-        margin-bottom: 5px;
-    }
-    .terminal-status {
-        color: #ffffff;
-        font-style: italic;
-        text-align: center;
-        font-size: 14px;
-        margin-bottom: 20px;
-    }
+    .stApp { background-color: #0a0a0a; }
     .chat-box {
         background-color: #000000;
-        border: 2px solid #2d2d2d;
-        border-radius: 5px;
-        padding: 15px;
-        font-family: 'Courier New', Courier, monospace;
-        color: #4af626;
-        height: 350px;
+        border: 1px solid #4af626;
+        border-radius: 10px;
+        padding: 20px;
+        height: 400px;
         overflow-y: auto;
-        margin-bottom: 20px;
+        color: #4af626;
+        font-family: 'Courier New', monospace;
         white-space: pre-wrap;
     }
-    .mic-button {
-        width: 100%;
-        padding: 14px;
-        border-radius: 8px;
-        border: 2px solid #4af626;
-        background-color: #000000;
-        color: #4af626;
-        font-weight: bold;
-        cursor: pointer;
-        font-size: 18px;
-        font-family: 'Courier New', Courier, monospace;
-        transition: 0.3s;
-        margin-bottom: 10px;
-    }
-    .mic-button:hover {
-        background-color: #4af626;
-        color: #000000;
-    }
-    .mic-button.listening {
-        background-color: #4af626;
-        color: #000000;
-        animation: pulse 1s infinite;
-    }
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.5; }
-        100% { opacity: 1; }
-    }
+    .title { color: #4af626; text-align: center; font-size: 40px; font-weight: bold; }
+    .status { color: #aaa; text-align: center; font-style: italic; }
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="terminal-title">⚡ JARVIS AI ONLINE SYSTEM</div>', unsafe_allow_html=True)
+st.markdown('<div class="title">⚡ JARVIS (AWS Proxy)</div>', unsafe_allow_html=True)
 
-# ================= GEMINI CONFIG =================
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-else:
-    api_key = None
+# ================= SECRETS LOAD =================
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+    API_URL = st.secrets["GEMINI_API_BASE_URL"]  # Ye URL aapko AWS se lena hai
+except KeyError as e:
+    st.error(f"❌ Secrets mein '{e.args[0]}' missing hai! `.streamlit/secrets.toml` check karein.")
+    st.stop()
 
-@st.cache_resource
-def get_ai_client(key):
-    if key:
-        try:
-            return genai.Client(api_key=key)
-        except Exception as e:
-            st.error(f"Client init error: {e}")
-            return None
-    return None
+if not API_URL:
+    st.error("❌ GEMINI_API_BASE_URL empty hai. AWS API Gateway URL daalein.")
+    st.stop()
 
-ai_client = get_ai_client(api_key)
+# ================= SESSION STATE =================
+if "history" not in st.session_state:
+    st.session_state.history = "Jarvis: Systems online. Ready, Sir.\n"
+if "tts" not in st.session_state:
+    st.session_state.tts = ""
 
-# Session State
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = "Jarvis: Systems online. Jarvis AI initialized.\nJarvis: Ready for your command, Sir."
-if "tts_text" not in st.session_state:
-    st.session_state.tts_text = ""
-if "voice_input" not in st.session_state:
+# ================= CHAT DISPLAY =================
+st.markdown(f'<div class="chat-box">{st.session_state.history}</div>', unsafe_allow_html=True)
+st.markdown('<div class="status">🟢 Status: Active | Click Mic or Type Command</div>', unsafe_allow_html=True)
+
+# ================= VOICE INPUT (Hidden) =================
+voice_text = st.text_input("voice", key="voice_input", label_visibility="collapsed")
+if voice_text:
     st.session_state.voice_input = ""
 
-# ================= CORE PROCESSOR =================
-def process_command(command):
-    if not command or command.strip() == "":
-        return
-        
-    st.session_state.chat_history += f"\n\nYou: {command}"
-    cmd = command.lower().strip()
-    
-    # System Commands
-    if any(word in cmd for word in ["stop", "exit", "bye jarvis", "shutdown"]):
-        reply = "Going offline. Goodbye, Sir. 🖥️"
-        st.session_state.chat_history += f"\n\nJarvis: {reply}"
-        st.session_state.tts_text = reply
-        
-    elif "open google" in cmd:
-        reply = "Opening Google, Sir. 🌐"
-        st.session_state.chat_history += f"\n\nJarvis: {reply}"
-        st.session_state.tts_text = reply
-        st.markdown('<meta http-equiv="refresh" content="0;URL=\'https://www.google.com\'" />', unsafe_allow_html=True)
-        
-    elif "open youtube" in cmd:
-        reply = "Opening YouTube, Sir. 📺"
-        st.session_state.chat_history += f"\n\nJarvis: {reply}"
-        st.session_state.tts_text = reply
-        st.markdown('<meta http-equiv="refresh" content="0;URL=\'https://www.youtube.com\'" />', unsafe_allow_html=True)
-    
-    elif "time" in cmd or "kitna baj" in cmd:
-        now = datetime.now().strftime("%I:%M %p")
-        reply = f"Sir, the current time is {now}. ⏰"
-        st.session_state.chat_history += f"\n\nJarvis: {reply}"
-        st.session_state.tts_text = reply
-
-    elif "date" in cmd or "tareek" in cmd:
-        today = datetime.now().strftime("%d %B %Y")
-        reply = f"Sir, today is {today}. 📅"
-        st.session_state.chat_history += f"\n\nJarvis: {reply}"
-        st.session_state.tts_text = reply
-
-    else:
-        if not ai_client:
-            reply = "Sir, Gemini API Key is missing. Please add it to secrets."
-            st.session_state.chat_history += f"\n\nJarvis: {reply}"
-            st.session_state.tts_text = reply
-        else:
+# ================= AI CALL FUNCTION (Using AWS Proxy) =================
+def call_ai(cmd):
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": API_KEY  # AWS API Gateway expects this
+        }
+        # Payload format – adjust based on your proxy expectation
+        payload = {
+            "contents": [{"parts": [{"text": f"You are JARVIS. User said: {cmd}. Reply in 1-2 short sentences."}]}]
+        }
+        response = requests.post(API_URL, json=payload, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            # Try to extract reply (Google-style or custom)
             try:
-                # 🔥 FIX: Correct model name
-                response = ai_client.models.generate_content(
-                    model='gemini-1.5-flash',  # <--- YAHAN FIX KIYA
-                    contents=command,
-                    config={
-                        'system_instruction': """You are JARVIS, Tony Stark's AI assistant. 
-                        Keep responses short, crisp, and under 2 sentences. 
-                        Use 'Sir' for the user. Be helpful and professional."""
-                    }
-                )
-                reply = response.text.strip()
-                st.session_state.chat_history += f"\n\nJarvis: {reply}"
-                st.session_state.tts_text = reply
-            except Exception as e:
-                error_msg = str(e)
-                if "404" in error_msg or "NOT_FOUND" in error_msg:
-                    reply = "Sir, AI model not found. Please check the model name configuration. 🤖"
-                elif "429" in error_msg:
-                    reply = "Sir, rate limit reached. Please wait 5 seconds. ⏳"
-                elif "API_KEY" in error_msg:
-                    reply = "Sir, invalid API key. Please check your credentials. 🔑"
-                else:
-                    reply = f"Sir, AI core error: {error_msg[:80]}"
-                st.session_state.chat_history += f"\n\nJarvis: {reply}"
-                st.session_state.tts_text = reply
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except:
+                return data.get("reply") or data.get("response") or "Sir, I got a response but couldn't parse it."
+        else:
+            return f"Sir, API error {response.status_code}: {response.text[:100]}"
+    except Exception as e:
+        return f"Sir, connection error: {str(e)[:80]}"
 
-# Status
-status_col1, status_col2 = st.columns([3, 1])
-with status_col1:
-    st.markdown('<div class="terminal-status">🟢 Status: Active | Click Mic or Type Command</div>', unsafe_allow_html=True)
-with status_col2:
-    if ai_client:
-        st.markdown('<div class="terminal-status" style="color:#4af626;">✅ AI Online</div>', unsafe_allow_html=True)
+# ================= PROCESS COMMAND =================
+def process_cmd(cmd):
+    if not cmd:
+        return
+    st.session_state.history += f"You: {cmd}\n"
+    cmd_lower = cmd.lower()
+
+    # Local commands
+    if "time" in cmd_lower:
+        reply = f"Sir, time is {datetime.now().strftime('%I:%M %p')}."
+    elif "date" in cmd_lower:
+        reply = f"Sir, today is {datetime.now().strftime('%d %B %Y')}."
+    elif "open google" in cmd_lower:
+        reply = "Opening Google, Sir."
+        st.session_state.history += f"Jarvis: {reply}\n"
+        st.session_state.tts = reply
+        st.markdown('<meta http-equiv="refresh" content="0;URL=\'https://google.com\'">', unsafe_allow_html=True)
+        return
+    elif "exit" in cmd_lower or "bye" in cmd_lower:
+        reply = "Goodbye, Sir!"
+        st.session_state.history += f"Jarvis: {reply}\n"
+        st.session_state.tts = reply
+        st.rerun()
+        return
     else:
-        st.markdown('<div class="terminal-status" style="color:#ff4b4b;">❌ API Missing</div>', unsafe_allow_html=True)
+        reply = call_ai(cmd)  # AI call
 
-# Chat Display
-st.markdown(f'<div class="chat-box">{st.session_state.chat_history}</div>', unsafe_allow_html=True)
+    st.session_state.history += f"Jarvis: {reply}\n"
+    st.session_state.tts = reply
 
-# ================= HIDDEN VOICE INPUT =================
-# Isme JS se voice text aayega
-voice_text = st.text_input("hidden_voice", key="voice_input_field", label_visibility="collapsed")
-
-if voice_text and voice_text != "":
-    process_command(voice_text)
-    # Clear karo taaki loop na ho
-    st.session_state.voice_input_field = ""
-    st.rerun()
-
-# ================= JAVASCRIPT: VOICE RECOGNITION + TTS =================
-tts_text = st.session_state.tts_text
-
+# ================= JAVASCRIPT (Voice + TTS) =================
+tts_text = st.session_state.get("tts", "")
 js_code = f"""
 <script>
-// ================= TEXT TO SPEECH (JARVIS BOLTA HAI) =================
-function speakJarvis(text) {{
-    if ('speechSynthesis' in window && text && text !== "") {{
+// Text to Speech
+function speak(text) {{
+    if (window.speechSynthesis && text) {{
         window.speechSynthesis.cancel();
-        let utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 0.9;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
-        // Try to find a male voice
-        let voices = window.speechSynthesis.getVoices();
-        let jarvisVoice = voices.find(v => v.name.includes('Male') || v.name.includes('David') || v.name.includes('Google UK'));
-        if (jarvisVoice) utterance.voice = jarvisVoice;
-        window.speechSynthesis.speak(utterance);
+        let u = new SpeechSynthesisUtterance(text);
+        u.rate = 0.9;
+        window.speechSynthesis.speak(u);
     }}
 }}
+let t = `{tts_text}`;
+if (t) {{ setTimeout(() => speak(t), 300); }}
 
-// Agar TTS text hai toh bolo
-let ttsText = `{tts_text}`;
-if (ttsText && ttsText !== "") {{
-    setTimeout(() => {{ speakJarvis(ttsText); }}, 300);
-}}
+// Speech to Text
+const btn = document.createElement('button');
+btn.innerText = '🎤 Click to Speak';
+btn.style.cssText = 'width:100%; padding:15px; background:#000; color:#4af626; border:2px solid #4af626; border-radius:8px; font-size:20px; margin:10px 0; cursor:pointer;';
+btn.id = 'micBtn';
+document.querySelector('.stApp').prepend(btn);
 
-// ================= SPEECH TO TEXT (USER BOLTA HAI) =================
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-if (!SpeechRecognition) {{
-    document.getElementById('mic-btn').innerHTML = '❌ Browser Not Supported';
-    document.getElementById('mic-btn').disabled = true;
-}} else {{
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-IN'; // Hindi+English samjhega
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    const micBtn = document.getElementById('mic-btn');
-    
-    micBtn.addEventListener('click', function() {{
-        try {{
-            recognition.start();
-            this.innerHTML = '⏳ Listening... Speak Now 🎤';
-            this.classList.add('listening');
-        }} catch (e) {{
-            console.log('Error:', e);
-        }}
-    }});
-
-    recognition.onresult = function(event) {{
-        const transcript = event.results[0][0].transcript;
-        console.log('Recognized:', transcript);
-        
-        // Streamlit ke hidden input mein daalo
-        const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-        let targetInput = null;
-        for (let input of inputs) {{
-            if (input.id && input.id.includes('voice_input_field')) {{
-                targetInput = input;
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {{
+    const rec = new SR();
+    rec.lang = 'en-IN';
+    btn.onclick = () => {{
+        btn.innerText = '⏳ Listening...';
+        btn.style.background = '#4af626';
+        btn.style.color = '#000';
+        rec.start();
+    }};
+    rec.onresult = (e) => {{
+        let text = e.results[0][0].transcript;
+        let inputs = window.parent.document.querySelectorAll('input[type="text"]');
+        for (let inp of inputs) {{
+            if (inp.id && inp.id.includes('voice_input')) {{
+                inp.value = text;
+                inp.dispatchEvent(new Event('input', {{bubbles:true}}));
+                inp.dispatchEvent(new KeyboardEvent('keydown', {{key:'Enter', keyCode:13}}));
                 break;
             }}
         }}
-        
-        if (targetInput) {{
-            targetInput.value = transcript;
-            targetInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            targetInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            
-            // Enter key press simulate karo
-            const enterEvent = new KeyboardEvent('keydown', {{
-                bubbles: true,
-                cancelable: true,
-                key: 'Enter',
-                keyCode: 13
-            }});
-            targetInput.dispatchEvent(enterEvent);
-        }}
-        
-        micBtn.innerHTML = '🎙️ Click to Speak';
-        micBtn.classList.remove('listening');
+        btn.innerText = '🎤 Click to Speak';
+        btn.style.background = '#000';
+        btn.style.color = '#4af626';
     }};
-
-    recognition.onerror = function(event) {{
-        console.error('Error:', event.error);
-        micBtn.innerHTML = '❌ Error: ' + event.error;
-        micBtn.classList.remove('listening');
-        setTimeout(() => {{
-            micBtn.innerHTML = '🎙️ Click to Speak';
-        }}, 2000);
+    rec.onerror = () => {{
+        btn.innerText = '❌ Error, Click Again';
+        btn.style.background = '#ff0000';
+        btn.style.color = '#fff';
+        setTimeout(() => {{ btn.innerText = '🎤 Click to Speak'; btn.style.background = '#000'; btn.style.color = '#4af626'; }}, 2000);
     }};
-
-    recognition.onend = function() {{
-        micBtn.innerHTML = '🎙️ Click to Speak';
-        micBtn.classList.remove('listening');
-    }};
+}} else {{
+    btn.innerText = '❌ Browser Not Supported';
 }}
 </script>
 """
-
-# ================= MIC BUTTON =================
-st.markdown("""
-    <button id="mic-btn" class="mic-button">
-        🎙️ Click to Speak
-    </button>
-""", unsafe_allow_html=True)
-
-# JS inject
 st.components.v1.html(js_code, height=0)
 
-# ================= MANUAL TEXT INPUT =================
-st.markdown("---")
-st.markdown("### ⌨️ Type Your Command")
-
-with st.form(key="command_form", clear_on_submit=True):
+# ================= TEXT INPUT FORM =================
+with st.form(key="form", clear_on_submit=True):
     col1, col2 = st.columns([5, 1])
     with col1:
-        text_input = st.text_input("Command:", placeholder="Type here...", label_visibility="collapsed")
+        txt = st.text_input("Command:", placeholder="Type here...", label_visibility="collapsed")
     with col2:
-        submit_button = st.form_submit_button("🚀 Send", use_container_width=True)
-    
-    if submit_button and text_input:
-        process_command(text_input)
+        sub = st.form_submit_button("🚀 Send", use_container_width=True)
+    if sub and txt:
+        process_cmd(txt)
         st.rerun()
 
-# ================= FOOTER =================
-st.markdown("""
-    <div style="text-align: center; color: #666; font-size: 12px; margin-top: 20px; font-family: 'Courier New', monospace;">
-        ⚡ JARVIS AI v2.0 | Model: Gemini 1.5 Flash
-    </div>
-""", unsafe_allow_html=True)
+# Clear TTS after speaking
+if "tts" in st.session_state:
+    st.session_state.tts = ""
